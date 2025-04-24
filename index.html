@@ -50,9 +50,11 @@
       drops.push({
         x: Math.random() * width,
         y: Math.random() * height,
-        length: 10 + Math.random() * 20,
-        speed: 4 + Math.random() * 4,
-        opacity: 0.3 + Math.random() * 0.3
+        ////////////////////////////////////////////////////////////////////////////
+        length: 20 + Math.random() * 20,
+        speed: 10 + Math.random() * 4,
+        opacity: 0.6 + Math.random() * 0.3
+        ////////////////////////////////////////////////////////////////////////////
       });
     }
 
@@ -62,7 +64,9 @@
 
       for (let drop of drops) {
         ctx.beginPath();
+        ////////////////////////////////////////////////////////////////////////////
         ctx.strokeStyle = `rgba(100, 150, 255, ${drop.opacity})`;
+        ////////////////////////////////////////////////////////////////////////////
         ctx.moveTo(drop.x, drop.y);
         ctx.lineTo(drop.x, drop.y + drop.length);
         ctx.stroke();
