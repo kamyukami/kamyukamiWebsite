@@ -72,4 +72,24 @@
         ctx.lineTo(drop.x, drop.y + drop.length);
         ctx.stroke();
 
-        drop.y
+        drop.y += drop.speed;
+        if (drop.y > height) {
+          drop.y = -drop.length;
+          drop.x = Math.random() * width;
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    window.addEventListener("resize", () => {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
+    });
+  </script>
+</body>
+</html>
