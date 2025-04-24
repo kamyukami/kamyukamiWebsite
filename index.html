@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Pluie Stylisée</title>
+  <title>Pluie Stylisée Interactive</title>
   <style>
     html, body {
       margin: 0;
@@ -10,14 +10,17 @@
       overflow: hidden;
       background: black;
     }
+
     canvas {
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
+      display: block;
       z-index: 0;
     }
+
     #textOverlay {
       position: absolute;
       top: 50%;
@@ -45,34 +48,65 @@
     canvas.height = height;
 
     const drops = [];
+    const mouse = { x: width / 2, y: height / 2 };
 
-    for (let i = 0; i < 300; i++) {
+    // Créer les gouttes
+    for (let i = 0; i < 400; i++) {
       drops.push({
         x: Math.random() * width,
         y: Math.random() * height,
-        ////////////////////////////////////////////////////////////////////////////
-        length: 100 + Math.random() * 200,
-        speed: .5 + Math.random() * 1,
-        opacity: 0.6 + Math.random() * 0.3
-        ////////////////////////////////////////////////////////////////////////////
+        length: 10 + Math.random() * 20,
+        speed: 3 + Math.random() * 3,
+        opacity: 0.2 + Math.random() * 0.4,
+        dx: -1.5 + Math.random() * 3 // vent horizontal
       });
     }
 
+    window.addEventListener("mousemove", e => {
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+    });
+
     function draw() {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
       ctx.fillRect(0, 0, width, height);
 
+      ctx.lineWidth = 2;
+      ctx.shadowColor = 'rgba(100,150,255,0.6)';
+      ctx.shadowBlur = 6;
+
+      const textRect = document.getElementById('textOverlay').getBoundingClientRect();
+
       for (let drop of drops) {
+        let dx = drop.x - mouse.x;
+        let dy = drop.y - mouse.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 100) {
+          drop.x += dx / dist * 1.5;
+          drop.y += dy / dist * 1.5;
+        }
+
+        // Interaction avec le texte
+        if (
+          drop.x > textRect.left &&
+          drop.x < textRect.right &&
+          drop.y > textRect.top &&
+          drop.y < textRect.bottom
+        ) {
+          drop.y -= drop.speed * 2; // rebond
+        }
+
         ctx.beginPath();
-        ////////////////////////////////////////////////////////////////////////////
         ctx.strokeStyle = `rgba(100, 150, 255, ${drop.opacity})`;
-        ////////////////////////////////////////////////////////////////////////////
         ctx.moveTo(drop.x, drop.y);
-        ctx.lineTo(drop.x, drop.y + drop.length);
+        ctx.lineTo(drop.x + drop.dx, drop.y + drop.length);
         ctx.stroke();
 
+        drop.x += drop.dx;
         drop.y += drop.speed;
-        if (drop.y > height) {
+
+        if (drop.y > height || drop.x < 0 || drop.x > width) {
           drop.y = -drop.length;
           drop.x = Math.random() * width;
         }
