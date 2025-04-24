@@ -1,204 +1,146 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Boids GPGPU WebGL2</title>
+  <title>Boids Simulation (CPU)</title>
   <style>
-    html, body { margin: 0; overflow: hidden; background: black; }
-    canvas { display: block; width: 100vw; height: 100vh; }
+    body, html {
+      margin: 0; padding: 0; overflow: hidden;
+      background: black;
+    }
+    canvas {
+      display: block;
+    }
   </style>
 </head>
 <body>
-<canvas id="glCanvas"></canvas>
-<script type="module">
-import * as twgl from 'https://cdn.skypack.dev/twgl.js';
+<canvas id="boidsCanvas"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.min.js"></script>
+<script>
+  const canvas = document.getElementById('boidsCanvas');
+  const ctx = canvas.getContext('2d');
+  let width = canvas.width = window.innerWidth;
+  let height = canvas.height = window.innerHeight;
 
-const canvas = document.getElementById("glCanvas");
-const gl = canvas.getContext("webgl2");
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+  window.addEventListener('resize', () => {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+  });
 
-if (!gl.getExtension("EXT_color_buffer_float")) alert("EXT_color_buffer_float manquant");
+  const settings = {
+    numBoids: 100,
+    speed: 2,
+    alignStrength: 1.0,
+    cohesionStrength: 1.0,
+    separationStrength: 1.5,
+    perceptionRadius: 50
+  };
 
-let mouse = [0, 0];
-canvas.addEventListener("mousemove", e => {
-  mouse = [(e.clientX / canvas.width) * 2.0 - 1.0, -((e.clientY / canvas.height) * 2.0 - 1.0)];
-});
+  const gui = new dat.GUI();
+  gui.add(settings, 'numBoids', 10, 1000, 1).onChange(initBoids);
+  gui.add(settings, 'speed', 0.1, 10);
+  gui.add(settings, 'alignStrength', 0, 5);
+  gui.add(settings, 'cohesionStrength', 0, 5);
+  gui.add(settings, 'separationStrength', 0, 5);
+  gui.add(settings, 'perceptionRadius', 10, 200);
 
-const TEX_SIZE = 128;
-const NUM = TEX_SIZE * TEX_SIZE;
-const texCoords = new Float32Array(NUM * 2);
-for (let i = 0; i < NUM; ++i) {
-  texCoords[i * 2 + 0] = (i % TEX_SIZE + 0.5) / TEX_SIZE;
-  texCoords[i * 2 + 1] = (Math.floor(i / TEX_SIZE) + 0.5) / TEX_SIZE;
-}
+  class Boid {
+    constructor() {
+      this.position = { x: Math.random() * width, y: Math.random() * height };
+      const angle = Math.random() * 2 * Math.PI;
+      this.velocity = { x: Math.cos(angle), y: Math.sin(angle) };
+    }
 
-const quad = {
-  a_position: { numComponents: 2, data: [-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1] }
-};
+    update(boids) {
+      let align = { x: 0, y: 0 };
+      let cohesion = { x: 0, y: 0 };
+      let separation = { x: 0, y: 0 };
+      let total = 0;
 
-const boidBufferInfo = twgl.createBufferInfoFromArrays(gl, {
-  a_uv: { numComponents: 2, data: texCoords },
-});
+      for (let other of boids) {
+        const dx = other.position.x - this.position.x;
+        const dy = other.position.y - this.position.y;
+        const dist = Math.hypot(dx, dy);
+        if (other !== this && dist < settings.perceptionRadius) {
+          align.x += other.velocity.x;
+          align.y += other.velocity.y;
 
-function createDataTexture() {
-  const data = new Float32Array(NUM * 4);
-  for (let i = 0; i < NUM; i++) {
-    data[i * 4 + 0] = Math.random() * 2 - 1;
-    data[i * 4 + 1] = Math.random() * 2 - 1;
-    data[i * 4 + 2] = Math.random() * 0.01;
-    data[i * 4 + 3] = Math.random() * 0.01;
+          cohesion.x += other.position.x;
+          cohesion.y += other.position.y;
+
+          separation.x -= dx / dist;
+          separation.y -= dy / dist;
+
+          total++;
+        }
+      }
+
+      if (total > 0) {
+        // Alignment
+        align.x /= total;
+        align.y /= total;
+        const magA = Math.hypot(align.x, align.y);
+        if (magA > 0) {
+          align.x = (align.x / magA) * settings.speed - this.velocity.x;
+          align.y = (align.y / magA) * settings.speed - this.velocity.y;
+        }
+
+        // Cohesion
+        cohesion.x /= total;
+        cohesion.y /= total;
+        cohesion.x = (cohesion.x - this.position.x) * 0.01;
+        cohesion.y = (cohesion.y - this.position.y) * 0.01;
+
+        // Separation already normalized
+      }
+
+      this.velocity.x += align.x * settings.alignStrength + cohesion.x * settings.cohesionStrength + separation.x * settings.separationStrength;
+      this.velocity.y += align.y * settings.alignStrength + cohesion.y * settings.cohesionStrength + separation.y * settings.separationStrength;
+
+      const speed = Math.hypot(this.velocity.x, this.velocity.y);
+      if (speed > settings.speed) {
+        this.velocity.x = (this.velocity.x / speed) * settings.speed;
+        this.velocity.y = (this.velocity.y / speed) * settings.speed;
+      }
+
+      this.position.x += this.velocity.x;
+      this.position.y += this.velocity.y;
+
+      // Wrap around edges
+      if (this.position.x > width) this.position.x = 0;
+      if (this.position.x < 0) this.position.x = width;
+      if (this.position.y > height) this.position.y = 0;
+      if (this.position.y < 0) this.position.y = height;
+    }
+
+    draw() {
+      ctx.beginPath();
+      ctx.arc(this.position.x, this.position.y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#00ffff';
+      ctx.fill();
+    }
   }
-  return twgl.createTexture(gl, {
-    width: TEX_SIZE,
-    height: TEX_SIZE,
-    src: data,
-    format: gl.RGBA,
-    internalFormat: gl.RGBA32F,
-    minMag: gl.NEAREST,
-    type: gl.FLOAT,
-  });
-}
 
-const state = {
-  posA: createDataTexture(),
-  posB: createDataTexture(),
-  velA: createDataTexture(),
-  velB: createDataTexture(),
-};
+  let boids = [];
+  function initBoids() {
+    boids = [];
+    for (let i = 0; i < settings.numBoids; i++) {
+      boids.push(new Boid());
+    }
+  }
 
-const fbPos = twgl.createFramebufferInfo(gl, [{ attachment: state.posB }], TEX_SIZE, TEX_SIZE);
-const fbVel = twgl.createFramebufferInfo(gl, [{ attachment: state.velB }], TEX_SIZE, TEX_SIZE);
+  function animate() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.fillRect(0, 0, width, height);
+    for (let boid of boids) {
+      boid.update(boids);
+      boid.draw();
+    }
+    requestAnimationFrame(animate);
+  }
 
-const updateShader = twgl.createProgramInfo(gl, [
-  `#version 300 es
-   in vec2 a_position;
-   out vec2 v_uv;
-   void main() {
-     v_uv = a_position * 0.5 + 0.5;
-     gl_Position = vec4(a_position, 0.0, 1.0);
-   }`,
-  `#version 300 es
-   precision highp float;
-   uniform sampler2D u_pos;
-   uniform sampler2D u_vel;
-   uniform vec2 u_mouse;
-   uniform vec2 u_texSize;
-   in vec2 v_uv;
-   out vec4 outColor;
-   void main() {
-     float uMaxSpeed = 0.01;
-     float uAlign = 0.02;
-     float uCohesion = 0.005;
-     float uSeparation = 0.03;
-     float uMouseForce = 0.003;
-     float uMouseRadius = 0.2;
-
-     vec2 pos = texture(u_pos, v_uv).xy;
-     vec2 vel = texture(u_vel, v_uv).xy;
-     vec2 align = vec2(0), cohesion = vec2(0), separation = vec2(0);
-     int count = 0;
-     for (int x = -2; x <= 2; ++x) {
-       for (int y = -2; y <= 2; ++y) {
-         vec2 offset = vec2(float(x), float(y)) / u_texSize;
-         vec2 otherPos = texture(u_pos, v_uv + offset).xy;
-         vec2 otherVel = texture(u_vel, v_uv + offset).xy;
-         float d = distance(pos, otherPos);
-         if (d > 0. && d < 0.2) {
-           align += otherVel;
-           cohesion += otherPos;
-           separation += (pos - otherPos) / d;
-           count++;
-         }
-       }
-     }
-     if (count > 0) {
-       align /= float(count);
-       cohesion = cohesion / float(count) - pos;
-       separation /= float(count);
-       vel += align * uAlign + cohesion * uCohesion + separation * uSeparation;
-     }
-     float dm = distance(pos, u_mouse);
-     if (dm < uMouseRadius) vel += normalize(pos - u_mouse) * uMouseForce;
-     vel = length(vel) > uMaxSpeed ? normalize(vel) * uMaxSpeed : vel;
-     outColor = vec4(vel, 0.0, 1.0);
-   }`
-]);
-
-const positionShader = twgl.createProgramInfo(gl, [
-  `#version 300 es
-   in vec2 a_position;
-   out vec2 v_uv;
-   void main() {
-     v_uv = a_position * 0.5 + 0.5;
-     gl_Position = vec4(a_position, 0.0, 1.0);
-   }`,
-  `#version 300 es
-   precision highp float;
-   uniform sampler2D u_pos;
-   uniform sampler2D u_vel;
-   in vec2 v_uv;
-   out vec4 outColor;
-   void main() {
-     vec2 pos = texture(u_pos, v_uv).xy;
-     vec2 vel = texture(u_vel, v_uv).xy;
-     pos += vel;
-     pos = mod(pos + 1.0, 2.0) - 1.0;
-     outColor = vec4(pos, 0.0, 1.0);
-   }`
-]);
-
-const drawShader = twgl.createProgramInfo(gl, [
-  `#version 300 es
-   in vec2 a_uv;
-   uniform sampler2D u_pos;
-   void main() {
-     vec2 pos = texture(u_pos, a_uv).xy;
-     gl_Position = vec4(pos, 0.0, 1.0);
-     gl_PointSize = 2.0;
-   }`,
-  `#version 300 es
-   precision mediump float;
-   out vec4 outColor;
-   void main() {
-     outColor = vec4(0.1, 1.0, 0.8, 1.0);
-   }`
-]);
-
-function render() {
-  gl.useProgram(updateShader.program);
-  twgl.setBuffersAndAttributes(gl, updateShader, twgl.createBufferInfoFromArrays(gl, quad));
-  twgl.setUniforms(updateShader, {
-    u_pos: state.posA,
-    u_vel: state.velA,
-    u_texSize: [TEX_SIZE, TEX_SIZE],
-    u_mouse: mouse
-  });
-  twgl.bindFramebufferInfo(gl, fbVel);
-  twgl.drawBufferInfo(gl, twgl.createBufferInfoFromArrays(gl, quad), gl.TRIANGLES);
-
-  gl.useProgram(positionShader.program);
-  twgl.setBuffersAndAttributes(gl, positionShader, twgl.createBufferInfoFromArrays(gl, quad));
-  twgl.setUniforms(positionShader, {
-    u_pos: state.posA,
-    u_vel: state.velB,
-  });
-  twgl.bindFramebufferInfo(gl, fbPos);
-  twgl.drawBufferInfo(gl, twgl.createBufferInfoFromArrays(gl, quad), gl.TRIANGLES);
-
-  gl.useProgram(drawShader.program);
-  gl.viewport(0, 0, canvas.width, canvas.height);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  twgl.setBuffersAndAttributes(gl, drawShader, boidBufferInfo);
-  twgl.setUniforms(drawShader, { u_pos: state.posB });
-  gl.drawArrays(gl.POINTS, 0, NUM);
-
-  [state.posA, state.posB] = [state.posB, state.posA];
-  [state.velA, state.velB] = [state.velB, state.velA];
-
-  requestAnimationFrame(render);
-}
-render();
+  initBoids();
+  animate();
 </script>
 </body>
 </html>
