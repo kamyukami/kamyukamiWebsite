@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>GPU Boids WebGL2</title>
+  <title>GPU Boids WebGL2 (Fixed)</title>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; background: black; }
     canvas { display: block; width: 100vw; height: 100vh; }
@@ -12,85 +12,87 @@
 <canvas id="glCanvas"></canvas>
 <script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.min.js"></script>
 <script type="module">
+// Simplified working GPU boids example with fixed framebuffer formats
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl2');
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
-
-// Check
 if (!gl) alert("WebGL2 is required.");
 
 const settings = {
-  numBoids: 512,
+  numBoids: 256,
   align: 1.0,
-  cohesion: 0.8,
-  separation: 1.2,
-  speed: 1.5,
-  perception: 0.04
+  cohesion: 0.5,
+  separation: 1.5,
+  speed: 1.0,
+  perception: 0.05
 };
 const gui = new dat.GUI();
-gui.add(settings, 'numBoids', 64, 1024, 1).onChange(() => location.reload());
+gui.add(settings, 'numBoids', 64, 1024).step(1).onChange(() => location.reload());
 gui.add(settings, 'align', 0, 2);
 gui.add(settings, 'cohesion', 0, 2);
 gui.add(settings, 'separation', 0, 2);
 gui.add(settings, 'speed', 0.1, 5);
-gui.add(settings, 'perception', 0.001, 0.1);
+gui.add(settings, 'perception', 0.01, 0.2);
 
-// Helpers
-const rand = () => Math.random() * 2 - 1;
 const simSize = Math.ceil(Math.sqrt(settings.numBoids));
 const texSize = simSize;
-const texRes = texSize * texSize;
 
 function createFBO(w, h) {
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, null); 
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
   const fbo = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-
   return { fbo, tex };
 }
 
+const posA = createFBO(texSize, texSize);
+const posB = createFBO(texSize, texSize);
+const velA = createFBO(texSize, texSize);
+const velB = createFBO(texSize, texSize);
 
-// Create textures
-const velocityA = createFBO(texSize, texSize);
-const velocityB = createFBO(texSize, texSize);
-const positionA = createFBO(texSize, texSize);
-const positionB = createFBO(texSize, texSize);
+function fillTex(fbo, fill) {
+  const data = new Float32Array(texSize * texSize * 4);
+  for (let i = 0; i < texSize * texSize; i++) fill(data, i);
+  gl.bindTexture(gl.TEXTURE_2D, fbo.tex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texSize, texSize, gl.RGBA, gl.FLOAT, data);
+}
+fillTex(posA, (d, i) => { d[i*4] = Math.random(); d[i*4+1] = Math.random(); });
+fillTex(velA, (d, i) => {
+  const a = Math.random() * 6.28;
+  d[i*4] = Math.cos(a) * settings.speed;
+  d[i*4+1] = Math.sin(a) * settings.speed;
+});
 
-// Shaders
-function compile(type, source) {
+const quadVAO = gl.createVertexArray();
+const quadVBO = gl.createBuffer();
+gl.bindVertexArray(quadVAO);
+gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function compile(type, src) {
   const s = gl.createShader(type);
-  gl.shaderSource(s, source);
+  gl.shaderSource(s, src);
   gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s);
   return s;
 }
-function createProgram(vsSource, fsSource) {
+function link(vs, fs) {
   const p = gl.createProgram();
-  gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSource));
-  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSource));
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw gl.getProgramInfoLog(p);
   return p;
 }
 
-const quadVerts = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
-const quadVAO = gl.createVertexArray();
-const quadVBO = gl.createBuffer();
-gl.bindVertexArray(quadVAO);
-gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
-gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
-gl.enableVertexAttribArray(0);
-gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
-// Simulation shader
-const simProgram = createProgram(`#version 300 es
+const simProg = link(`#version 300 es
 in vec2 a_position;
 out vec2 v_uv;
 void main() {
@@ -98,58 +100,41 @@ void main() {
   gl_Position = vec4(a_position, 0, 1);
 }`, `#version 300 es
 precision highp float;
-uniform sampler2D u_posTex;
-uniform sampler2D u_velTex;
-uniform float u_time;
-uniform float u_speed;
-uniform float u_align;
-uniform float u_cohesion;
-uniform float u_separation;
-uniform float u_perception;
-uniform float u_size;
+uniform sampler2D u_pos, u_vel;
+uniform float u_speed, u_align, u_cohesion, u_separation, u_perception, u_size;
 in vec2 v_uv;
-out vec2 outVel;
-
+out vec4 outColor;
 void main() {
-  ivec2 id = ivec2(gl_FragCoord.xy);
-  vec2 selfPos = texture(u_posTex, v_uv).xy;
-  vec2 selfVel = texture(u_velTex, v_uv).xy;
-
-  vec2 align = vec2(0);
-  vec2 cohesion = vec2(0);
-  vec2 separation = vec2(0);
+  vec2 pos = texture(u_pos, v_uv).xy;
+  vec2 vel = texture(u_vel, v_uv).xy;
+  vec2 align = vec2(0), cohesion = vec2(0), separation = vec2(0);
   int count = 0;
-
   for (int y = 0; y < int(u_size); y++) {
     for (int x = 0; x < int(u_size); x++) {
-      vec2 otherUV = (vec2(x, y) + 0.5) / u_size;
-      vec2 otherPos = texture(u_posTex, otherUV).xy;
-      vec2 otherVel = texture(u_velTex, otherUV).xy;
-      float d = distance(selfPos, otherPos);
-      if (d > 0.0 && d < u_perception) {
-        align += otherVel;
-        cohesion += otherPos;
-        separation += (selfPos - otherPos) / d;
+      vec2 uv = (vec2(x,y)+0.5)/u_size;
+      vec2 p = texture(u_pos, uv).xy;
+      vec2 v = texture(u_vel, uv).xy;
+      float d = distance(p, pos);
+      if (d < u_perception && d > 0.0) {
+        align += v;
+        cohesion += p;
+        separation += (pos - p)/d;
         count++;
       }
     }
   }
-
   if (count > 0) {
-    align = normalize(align / float(count)) * u_speed - selfVel;
-    cohesion = ((cohesion / float(count)) - selfPos) * 0.1;
+    align = normalize(align/float(count)) * u_speed - vel;
+    cohesion = (cohesion/float(count) - pos) * 0.1;
     separation = separation / float(count);
   }
-
   vec2 acc = align * u_align + cohesion * u_cohesion + separation * u_separation;
-  vec2 newVel = selfVel + acc;
-  newVel = normalize(newVel) * u_speed;
-
-  outVel = newVel;
+  vel += acc;
+  vel = normalize(vel) * u_speed;
+  outColor = vec4(vel, 0, 1);
 }`);
 
-// Position update shader
-const posProgram = createProgram(`#version 300 es
+const posProg = link(`#version 300 es
 in vec2 a_position;
 out vec2 v_uv;
 void main() {
@@ -157,31 +142,28 @@ void main() {
   gl_Position = vec4(a_position, 0, 1);
 }`, `#version 300 es
 precision highp float;
-uniform sampler2D u_posTex;
-uniform sampler2D u_velTex;
+uniform sampler2D u_pos, u_vel;
 in vec2 v_uv;
-out vec2 outPos;
+out vec4 outColor;
 void main() {
-  vec2 pos = texture(u_posTex, v_uv).xy;
-  vec2 vel = texture(u_velTex, v_uv).xy;
-  pos += vel * 0.01;
-  pos = mod(pos, 1.0);
-  outPos = pos;
+  vec2 p = texture(u_pos, v_uv).xy;
+  vec2 v = texture(u_vel, v_uv).xy;
+  p += v * 0.01;
+  p = mod(p, 1.0);
+  outColor = vec4(p, 0, 1);
 }`);
 
-// Rendering
-const renderProgram = createProgram(`#version 300 es
-precision highp float;
-uniform sampler2D u_posTex;
+const drawProg = link(`#version 300 es
+layout(location=0) in float id;
+uniform sampler2D u_pos;
 uniform float u_size;
-layout(location = 0) in float a_id;
 void main() {
-  float i = floor(mod(a_id, u_size));
-  float j = floor(a_id / u_size);
+  float i = mod(id, u_size);
+  float j = floor(id / u_size);
   vec2 uv = (vec2(i, j) + 0.5) / u_size;
-  vec2 pos = texture(u_posTex, uv).xy;
+  vec2 p = texture(u_pos, uv).xy;
+  gl_Position = vec4(p*2.0 - 1.0, 0, 1);
   gl_PointSize = 2.0;
-  gl_Position = vec4(pos * 2.0 - 1.0, 0, 1);
 }`, `#version 300 es
 precision mediump float;
 out vec4 outColor;
@@ -189,89 +171,62 @@ void main() {
   outColor = vec4(0.1, 1.0, 1.0, 1.0);
 }`);
 
-// Init data
-function fillTex(fbo, fill) {
-  const data = new Float32Array(texRes * 2);
-  for (let i = 0; i < texRes; i++) {
-    fill(data, i);
-  }
-  gl.bindTexture(gl.TEXTURE_2D, fbo.tex);
-  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texSize, texSize, gl.RG, gl.FLOAT, data);
-}
-fillTex(positionA, (data, i) => {
-  data[i*2] = Math.random();
-  data[i*2+1] = Math.random();
-});
-fillTex(velocityA, (data, i) => {
-  const a = Math.random() * 6.28;
-  data[i*2] = Math.cos(a) * settings.speed;
-  data[i*2+1] = Math.sin(a) * settings.speed;
-});
-
-// GPU buffers
-const ids = new Float32Array(texRes).map((_, i) => i);
-const idBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer);
+const ids = new Float32Array(texSize*texSize).map((_, i) => i);
+const idBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, idBuf);
 gl.bufferData(gl.ARRAY_BUFFER, ids, gl.STATIC_DRAW);
 
-// Ping-pong swap
-let posIn = positionA, posOut = positionB;
-let velIn = velocityA, velOut = velocityB;
+let posIn = posA, posOut = posB;
+let velIn = velA, velOut = velB;
 
-function swapBuffers() {
+function swap() {
   [posIn, posOut] = [posOut, posIn];
   [velIn, velOut] = [velOut, velIn];
 }
 
-// Main loop
 function step() {
-  // 1. Simulate velocity
-  gl.useProgram(simProgram);
+  gl.useProgram(simProg);
   gl.bindFramebuffer(gl.FRAMEBUFFER, velOut.fbo);
   gl.viewport(0, 0, texSize, texSize);
   gl.bindVertexArray(quadVAO);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_time'), performance.now() * 0.001);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_speed'), settings.speed);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_align'), settings.align);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_cohesion'), settings.cohesion);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_separation'), settings.separation);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_perception'), settings.perception);
-  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_size'), texSize);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, posIn.tex);
-  gl.uniform1i(gl.getUniformLocation(simProgram, 'u_posTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(simProg, 'u_pos'), 0);
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, velIn.tex);
-  gl.uniform1i(gl.getUniformLocation(simProgram, 'u_velTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(simProg, 'u_vel'), 1);
+  gl.uniform1f(gl.getUniformLocation(simProg, 'u_speed'), settings.speed);
+  gl.uniform1f(gl.getUniformLocation(simProg, 'u_align'), settings.align);
+  gl.uniform1f(gl.getUniformLocation(simProg, 'u_cohesion'), settings.cohesion);
+  gl.uniform1f(gl.getUniformLocation(simProg, 'u_separation'), settings.separation);
+  gl.uniform1f(gl.getUniformLocation(simProg, 'u_perception'), settings.perception);
+  gl.uniform1f(gl.getUniformLocation(simProg, 'u_size'), texSize);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-  // 2. Update position
-  gl.useProgram(posProgram);
+  gl.useProgram(posProg);
   gl.bindFramebuffer(gl.FRAMEBUFFER, posOut.fbo);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, posIn.tex);
-  gl.uniform1i(gl.getUniformLocation(posProgram, 'u_posTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(posProg, 'u_pos'), 0);
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, velOut.tex);
-  gl.uniform1i(gl.getUniformLocation(posProgram, 'u_velTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(posProg, 'u_vel'), 1);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-  // 3. Render
-  gl.useProgram(renderProgram);
+  gl.useProgram(drawProg);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer);
-  const a_id = gl.getAttribLocation(renderProgram, 'a_id');
-  gl.enableVertexAttribArray(a_id);
-  gl.vertexAttribPointer(a_id, 1, gl.FLOAT, false, 0, 0);
-  gl.uniform1f(gl.getUniformLocation(renderProgram, 'u_size'), texSize);
+  gl.bindBuffer(gl.ARRAY_BUFFER, idBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(gl.getUniformLocation(drawProg, 'u_size'), texSize);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, posOut.tex);
-  gl.uniform1i(gl.getUniformLocation(renderProgram, 'u_posTex'), 0);
-  gl.drawArrays(gl.POINTS, 0, texRes);
+  gl.uniform1i(gl.getUniformLocation(drawProg, 'u_pos'), 0);
+  gl.drawArrays(gl.POINTS, 0, texSize * texSize);
 
-  swapBuffers();
+  swap();
   requestAnimationFrame(step);
 }
 step();
