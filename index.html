@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Pluie Stylisée</title>
   <style>
     html, body {
@@ -10,7 +10,14 @@
       overflow: hidden;
       background: black;
     }
-
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 0;
+    }
     #textOverlay {
       position: absolute;
       top: 50%;
@@ -21,16 +28,6 @@
       color: white;
       mix-blend-mode: difference;
       pointer-events: none;
-      z-index: 2;
-    }
-
-    canvas {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      display: block;
       z-index: 1;
     }
   </style>
@@ -49,25 +46,23 @@
 
     const drops = [];
 
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 300; i++) {
       drops.push({
         x: Math.random() * width,
         y: Math.random() * height,
         length: 10 + Math.random() * 20,
         speed: 4 + Math.random() * 4,
-        opacity: 0.2 + Math.random() * 0.5
+        opacity: 0.3 + Math.random() * 0.3
       });
     }
 
     function draw() {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
       ctx.fillRect(0, 0, width, height);
-
-      ctx.strokeStyle = "rgba(100, 150, 255, 0.8)";
-      ctx.lineWidth = 1;
 
       for (let drop of drops) {
         ctx.beginPath();
+        ctx.strokeStyle = `rgba(100, 150, 255, ${drop.opacity})`;
         ctx.moveTo(drop.x, drop.y);
         ctx.lineTo(drop.x, drop.y + drop.length);
         ctx.stroke();
