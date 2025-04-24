@@ -4,8 +4,13 @@
   <meta charset="UTF-8" />
   <title>Pluie Stylisée</title>
   <style>
-    body { margin: 0; overflow: hidden; background: black; }
-    canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: black;
+    }
+
     #textOverlay {
       position: absolute;
       top: 50%;
@@ -16,6 +21,16 @@
       color: white;
       mix-blend-mode: difference;
       pointer-events: none;
+      z-index: 2;
+    }
+
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
       z-index: 1;
     }
   </style>
@@ -24,64 +39,37 @@
   <div id="textOverlay">PLUIE</div>
   <canvas id="rainCanvas"></canvas>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r148/three.min.js"></script>
   <script>
     const canvas = document.getElementById("rainCanvas");
-    const renderer = new THREE.WebGLRenderer({ canvas: canvas });
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    const ctx = canvas.getContext("2d");
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
 
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const drops = [];
 
-    const uniforms = {
-      uTime: { value: 0.0 },
-      uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
-    };
-
-    const material = new THREE.ShaderMaterial({
-      uniforms,
-      vertexShader: `
-        void main() {
-          gl_Position = vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        precision mediump float;
-        uniform float uTime;
-        uniform vec2 uResolution;
-
-        float rand(vec2 co) {
-          return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453);
-        }
-
-        void main() {
-          vec2 uv = gl_FragCoord.xy / uResolution.xy;
-          uv.y += uTime * 0.8; // scroll vers le bas
-
-          float line = step(0.99, fract(uv.y * 30.0 + rand(floor(uv * 100.0))));
-
-          vec3 rainColor = vec3(0.2, 0.5, 1.0) * line;
-
-          gl_FragColor = vec4(rainColor, 1.0);
-        }
-      `
-    });
-
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
-    scene.add(quad);
-
-    function animate(time) {
-      uniforms.uTime.value = time * 0.001;
-      renderer.render(scene, camera);
-      requestAnimationFrame(animate);
+    for (let i = 0; i < 500; i++) {
+      drops.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        length: 10 + Math.random() * 20,
+        speed: 4 + Math.random() * 4,
+        opacity: 0.2 + Math.random() * 0.5
+      });
     }
 
-    animate();
+    function draw() {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+      ctx.fillRect(0, 0, width, height);
 
-    window.addEventListener('resize', () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
-    });
-  </script>
-</body>
-</html>
+      ctx.strokeStyle = "rgba(100, 150, 255, 0.8)";
+      ctx.lineWidth = 1;
+
+      for (let drop of drops) {
+        ctx.beginPath();
+        ctx.moveTo(drop.x, drop.y);
+        ctx.lineTo(drop.x, drop.y + drop.length);
+        ctx.stroke();
+
+        drop.y
