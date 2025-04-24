@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pluie Stylisée</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: black; }
+    canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
+    #textOverlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-family: 'Arial Black', sans-serif;
+      font-size: 72px;
+      color: white;
+      mix-blend-mode: difference;
+      pointer-events: none;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="textOverlay">PLUIE</div>
+  <canvas id="rainCanvas"></canvas>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r148/three.min.js"></script>
+  <script>
+    const canvas = document.getElementById("rainCanvas");
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    const uniforms = {
+      uTime: { value: 0.0 },
+      uIntensity: { value: 0.8 },
+      uSpeed: { value: 1.2 },
+      uSize: { value: 0.02 },
+      uDirection: { value: 1.0 },
+      uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+    };
+
+    const material = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: `
+        void main() {
+          gl_Position = vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uIntensity;
+        uniform float uSpeed;
+        uniform float uSize;
+        uniform float uDirection;
+        uniform vec2 uResolution;
+
+        float hash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
+        float rain(vec2 uv) {
+          vec2 gv = fract(uv * uIntensity) - 0.5;
+          vec2 id = floor(uv * uIntensity);
+          float n = hash(id);
+          float y = fract(n + uTime * uSpeed);
+          float d = length(gv - vec2(0.0, y - 0.5));
+          return smoothstep(uSize, 0.0, d);
+        }
+
+        void main() {
+          vec2 uv = gl_FragCoord.xy / uResolution.xy;
+          uv.x += sin(uv.y * 20.0 + uTime) * 0.005 * uDirection;
+          float r = rain(uv);
+          vec3 col = vec3(0.0, 0.3, 0.6) * r;
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    });
+
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    scene.add(quad);
+
+    function animate(time) {
+      uniforms.uTime.value = time * 0.001;
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
