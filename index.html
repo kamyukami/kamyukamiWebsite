@@ -35,10 +35,6 @@
 
     const uniforms = {
       uTime: { value: 0.0 },
-      uIntensity: { value: 0.8 },
-      uSpeed: { value: 1.2 },
-      uSize: { value: 0.02 },
-      uDirection: { value: 1.0 },
       uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
     };
 
@@ -50,32 +46,23 @@
         }
       `,
       fragmentShader: `
+        precision mediump float;
         uniform float uTime;
-        uniform float uIntensity;
-        uniform float uSpeed;
-        uniform float uSize;
-        uniform float uDirection;
         uniform vec2 uResolution;
 
-        float hash(vec2 p) {
-          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-        }
-
-        float rain(vec2 uv) {
-          vec2 gv = fract(uv * uIntensity) - 0.5;
-          vec2 id = floor(uv * uIntensity);
-          float n = hash(id);
-          float y = fract(n + uTime * uSpeed);
-          float d = length(gv - vec2(0.0, y - 0.5));
-          return smoothstep(uSize, 0.0, d);
+        float rand(vec2 co) {
+          return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453);
         }
 
         void main() {
           vec2 uv = gl_FragCoord.xy / uResolution.xy;
-          uv.x += sin(uv.y * 20.0 + uTime) * 0.005 * uDirection;
-          float r = rain(uv);
-          vec3 col = vec3(0.0, 0.3, 0.6) * r;
-          gl_FragColor = vec4(col, 1.0);
+          uv.y += uTime * 0.8; // scroll vers le bas
+
+          float line = step(0.99, fract(uv.y * 30.0 + rand(floor(uv * 100.0))));
+
+          vec3 rainColor = vec3(0.2, 0.5, 1.0) * line;
+
+          gl_FragColor = vec4(rainColor, 1.0);
         }
       `
     });
@@ -88,6 +75,7 @@
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
     }
+
     animate();
 
     window.addEventListener('resize', () => {
