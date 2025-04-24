@@ -1,1 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GPU Boids WebGL2</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: black; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="glCanvas"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.min.js"></script>
+<script type="module">
+const canvas = document.getElementById('glCanvas');
+const gl = canvas.getContext('webgl2');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
+// Check
+if (!gl) alert("WebGL2 is required.");
+
+const settings = {
+  numBoids: 512,
+  align: 1.0,
+  cohesion: 0.8,
+  separation: 1.2,
+  speed: 1.5,
+  perception: 0.04
+};
+const gui = new dat.GUI();
+gui.add(settings, 'numBoids', 64, 1024, 1).onChange(() => location.reload());
+gui.add(settings, 'align', 0, 2);
+gui.add(settings, 'cohesion', 0, 2);
+gui.add(settings, 'separation', 0, 2);
+gui.add(settings, 'speed', 0.1, 5);
+gui.add(settings, 'perception', 0.001, 0.1);
+
+// Helpers
+const rand = () => Math.random() * 2 - 1;
+const simSize = Math.ceil(Math.sqrt(settings.numBoids));
+const texSize = simSize;
+const texRes = texSize * texSize;
+
+function createFBO(w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, w, h, 0, gl.RG, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+
+  return { fbo, tex };
+}
+
+// Create textures
+const velocityA = createFBO(texSize, texSize);
+const velocityB = createFBO(texSize, texSize);
+const positionA = createFBO(texSize, texSize);
+const positionB = createFBO(texSize, texSize);
+
+// Shaders
+function compile(type, source) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, source);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s);
+  return s;
+}
+function createProgram(vsSource, fsSource) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSource));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSource));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw gl.getProgramInfoLog(p);
+  return p;
+}
+
+const quadVerts = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+const quadVAO = gl.createVertexArray();
+const quadVBO = gl.createBuffer();
+gl.bindVertexArray(quadVAO);
+gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+// Simulation shader
+const simProgram = createProgram(`#version 300 es
+in vec2 a_position;
+out vec2 v_uv;
+void main() {
+  v_uv = a_position * 0.5 + 0.5;
+  gl_Position = vec4(a_position, 0, 1);
+}`, `#version 300 es
+precision highp float;
+uniform sampler2D u_posTex;
+uniform sampler2D u_velTex;
+uniform float u_time;
+uniform float u_speed;
+uniform float u_align;
+uniform float u_cohesion;
+uniform float u_separation;
+uniform float u_perception;
+uniform float u_size;
+in vec2 v_uv;
+out vec2 outVel;
+
+void main() {
+  ivec2 id = ivec2(gl_FragCoord.xy);
+  vec2 selfPos = texture(u_posTex, v_uv).xy;
+  vec2 selfVel = texture(u_velTex, v_uv).xy;
+
+  vec2 align = vec2(0);
+  vec2 cohesion = vec2(0);
+  vec2 separation = vec2(0);
+  int count = 0;
+
+  for (int y = 0; y < int(u_size); y++) {
+    for (int x = 0; x < int(u_size); x++) {
+      vec2 otherUV = (vec2(x, y) + 0.5) / u_size;
+      vec2 otherPos = texture(u_posTex, otherUV).xy;
+      vec2 otherVel = texture(u_velTex, otherUV).xy;
+      float d = distance(selfPos, otherPos);
+      if (d > 0.0 && d < u_perception) {
+        align += otherVel;
+        cohesion += otherPos;
+        separation += (selfPos - otherPos) / d;
+        count++;
+      }
+    }
+  }
+
+  if (count > 0) {
+    align = normalize(align / float(count)) * u_speed - selfVel;
+    cohesion = ((cohesion / float(count)) - selfPos) * 0.1;
+    separation = separation / float(count);
+  }
+
+  vec2 acc = align * u_align + cohesion * u_cohesion + separation * u_separation;
+  vec2 newVel = selfVel + acc;
+  newVel = normalize(newVel) * u_speed;
+
+  outVel = newVel;
+}`);
+
+// Position update shader
+const posProgram = createProgram(`#version 300 es
+in vec2 a_position;
+out vec2 v_uv;
+void main() {
+  v_uv = a_position * 0.5 + 0.5;
+  gl_Position = vec4(a_position, 0, 1);
+}`, `#version 300 es
+precision highp float;
+uniform sampler2D u_posTex;
+uniform sampler2D u_velTex;
+in vec2 v_uv;
+out vec2 outPos;
+void main() {
+  vec2 pos = texture(u_posTex, v_uv).xy;
+  vec2 vel = texture(u_velTex, v_uv).xy;
+  pos += vel * 0.01;
+  pos = mod(pos, 1.0);
+  outPos = pos;
+}`);
+
+// Rendering
+const renderProgram = createProgram(`#version 300 es
+precision highp float;
+uniform sampler2D u_posTex;
+uniform float u_size;
+layout(location = 0) in float a_id;
+void main() {
+  float i = floor(mod(a_id, u_size));
+  float j = floor(a_id / u_size);
+  vec2 uv = (vec2(i, j) + 0.5) / u_size;
+  vec2 pos = texture(u_posTex, uv).xy;
+  gl_PointSize = 2.0;
+  gl_Position = vec4(pos * 2.0 - 1.0, 0, 1);
+}`, `#version 300 es
+precision mediump float;
+out vec4 outColor;
+void main() {
+  outColor = vec4(0.1, 1.0, 1.0, 1.0);
+}`);
+
+// Init data
+function fillTex(fbo, fill) {
+  const data = new Float32Array(texRes * 2);
+  for (let i = 0; i < texRes; i++) {
+    fill(data, i);
+  }
+  gl.bindTexture(gl.TEXTURE_2D, fbo.tex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texSize, texSize, gl.RG, gl.FLOAT, data);
+}
+fillTex(positionA, (data, i) => {
+  data[i*2] = Math.random();
+  data[i*2+1] = Math.random();
+});
+fillTex(velocityA, (data, i) => {
+  const a = Math.random() * 6.28;
+  data[i*2] = Math.cos(a) * settings.speed;
+  data[i*2+1] = Math.sin(a) * settings.speed;
+});
+
+// GPU buffers
+const ids = new Float32Array(texRes).map((_, i) => i);
+const idBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer);
+gl.bufferData(gl.ARRAY_BUFFER, ids, gl.STATIC_DRAW);
+
+// Ping-pong swap
+let posIn = positionA, posOut = positionB;
+let velIn = velocityA, velOut = velocityB;
+
+function swapBuffers() {
+  [posIn, posOut] = [posOut, posIn];
+  [velIn, velOut] = [velOut, velIn];
+}
+
+// Main loop
+function step() {
+  // 1. Simulate velocity
+  gl.useProgram(simProgram);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, velOut.fbo);
+  gl.viewport(0, 0, texSize, texSize);
+  gl.bindVertexArray(quadVAO);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_time'), performance.now() * 0.001);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_speed'), settings.speed);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_align'), settings.align);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_cohesion'), settings.cohesion);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_separation'), settings.separation);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_perception'), settings.perception);
+  gl.uniform1f(gl.getUniformLocation(simProgram, 'u_size'), texSize);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, posIn.tex);
+  gl.uniform1i(gl.getUniformLocation(simProgram, 'u_posTex'), 0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, velIn.tex);
+  gl.uniform1i(gl.getUniformLocation(simProgram, 'u_velTex'), 1);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  // 2. Update position
+  gl.useProgram(posProgram);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, posOut.fbo);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, posIn.tex);
+  gl.uniform1i(gl.getUniformLocation(posProgram, 'u_posTex'), 0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, velOut.tex);
+  gl.uniform1i(gl.getUniformLocation(posProgram, 'u_velTex'), 1);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  // 3. Render
+  gl.useProgram(renderProgram);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer);
+  const a_id = gl.getAttribLocation(renderProgram, 'a_id');
+  gl.enableVertexAttribArray(a_id);
+  gl.vertexAttribPointer(a_id, 1, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(gl.getUniformLocation(renderProgram, 'u_size'), texSize);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, posOut.tex);
+  gl.uniform1i(gl.getUniformLocation(renderProgram, 'u_posTex'), 0);
+  gl.drawArrays(gl.POINTS, 0, texRes);
+
+  swapBuffers();
+  requestAnimationFrame(step);
+}
+step();
+</script>
+</body>
+</html>
