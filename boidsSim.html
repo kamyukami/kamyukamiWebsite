@@ -6,33 +6,10 @@
   <style>
     html, body { margin: 0; overflow: hidden; background: black; }
     canvas { display: block; width: 100vw; height: 100vh; }
-    #gui {
-      position: fixed;
-      top: 0;
-      right: 0;
-      padding: 10px;
-      background: rgba(0,0,0,0.6);
-      color: white;
-      font-family: sans-serif;
-      font-size: 12px;
-      z-index: 10;
-    }
-    #gui label {
-      display: block;
-      margin: 4px 0 2px;
-    }
   </style>
 </head>
 <body>
 <canvas id="glCanvas"></canvas>
-<div id="gui">
-  <label>Max Speed <input id="speed" type="range" min="0.001" max="0.05" step="0.001" value="0.01"></label>
-  <label>Align <input id="align" type="range" min="0.0" max="0.1" step="0.001" value="0.02"></label>
-  <label>Cohesion <input id="cohesion" type="range" min="0.0" max="0.05" step="0.001" value="0.005"></label>
-  <label>Separation <input id="separation" type="range" min="0.0" max="0.1" step="0.001" value="0.03"></label>
-  <label>Mouse Repulsion <input id="repulsion" type="range" min="0.0" max="0.01" step="0.0005" value="0.003"></label>
-  <label>Mouse Radius <input id="radius" type="range" min="0.05" max="1.0" step="0.01" value="0.2"></label>
-</div>
 <script type="module">
 import * as twgl from 'https://cdn.skypack.dev/twgl.js';
 
@@ -43,32 +20,22 @@ canvas.height = window.innerHeight;
 
 if (!gl.getExtension("EXT_color_buffer_float")) alert("EXT_color_buffer_float manquant");
 
-const sliders = ['speed', 'align', 'cohesion', 'separation', 'repulsion', 'radius'];
-const params = {};
-sliders.forEach(id => {
-  params[id] = parseFloat(document.getElementById(id).value);
-  document.getElementById(id).addEventListener('input', () => {
-    params[id] = parseFloat(document.getElementById(id).value);
-  });
-});
-
 let mouse = [0, 0];
 canvas.addEventListener("mousemove", e => {
   mouse = [(e.clientX / canvas.width) * 2.0 - 1.0, -((e.clientY / canvas.height) * 2.0 - 1.0)];
 });
 
-// Constantes
 const TEX_SIZE = 128;
 const NUM = TEX_SIZE * TEX_SIZE;
-const quad = {
-  a_position: { numComponents: 2, data: [-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1] }
-};
-
 const texCoords = new Float32Array(NUM * 2);
 for (let i = 0; i < NUM; ++i) {
   texCoords[i * 2 + 0] = (i % TEX_SIZE + 0.5) / TEX_SIZE;
   texCoords[i * 2 + 1] = (Math.floor(i / TEX_SIZE) + 0.5) / TEX_SIZE;
 }
+
+const quad = {
+  a_position: { numComponents: 2, data: [-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1] }
+};
 
 const boidBufferInfo = twgl.createBufferInfoFromArrays(gl, {
   a_uv: { numComponents: 2, data: texCoords },
@@ -100,8 +67,8 @@ const state = {
   velB: createDataTexture(),
 };
 
-const fbA = twgl.createFramebufferInfo(gl, [{ attachment: state.posB }], TEX_SIZE, TEX_SIZE);
-const fbB = twgl.createFramebufferInfo(gl, [{ attachment: state.velB }], TEX_SIZE, TEX_SIZE);
+const fbPos = twgl.createFramebufferInfo(gl, [{ attachment: state.posB }], TEX_SIZE, TEX_SIZE);
+const fbVel = twgl.createFramebufferInfo(gl, [{ attachment: state.velB }], TEX_SIZE, TEX_SIZE);
 
 const updateShader = twgl.createProgramInfo(gl, [
   `#version 300 es
@@ -117,10 +84,16 @@ const updateShader = twgl.createProgramInfo(gl, [
    uniform sampler2D u_vel;
    uniform vec2 u_mouse;
    uniform vec2 u_texSize;
-   uniform float uMaxSpeed, uAlign, uCohesion, uSeparation, uMouseForce, uMouseRadius;
    in vec2 v_uv;
    out vec4 outColor;
    void main() {
+     float uMaxSpeed = 0.01;
+     float uAlign = 0.02;
+     float uCohesion = 0.005;
+     float uSeparation = 0.03;
+     float uMouseForce = 0.003;
+     float uMouseRadius = 0.2;
+
      vec2 pos = texture(u_pos, v_uv).xy;
      vec2 vel = texture(u_vel, v_uv).xy;
      vec2 align = vec2(0), cohesion = vec2(0), separation = vec2(0);
@@ -152,6 +125,29 @@ const updateShader = twgl.createProgramInfo(gl, [
    }`
 ]);
 
+const positionShader = twgl.createProgramInfo(gl, [
+  `#version 300 es
+   in vec2 a_position;
+   out vec2 v_uv;
+   void main() {
+     v_uv = a_position * 0.5 + 0.5;
+     gl_Position = vec4(a_position, 0.0, 1.0);
+   }`,
+  `#version 300 es
+   precision highp float;
+   uniform sampler2D u_pos;
+   uniform sampler2D u_vel;
+   in vec2 v_uv;
+   out vec4 outColor;
+   void main() {
+     vec2 pos = texture(u_pos, v_uv).xy;
+     vec2 vel = texture(u_vel, v_uv).xy;
+     pos += vel;
+     pos = mod(pos + 1.0, 2.0) - 1.0;
+     outColor = vec4(pos, 0.0, 1.0);
+   }`
+]);
+
 const drawShader = twgl.createProgramInfo(gl, [
   `#version 300 es
    in vec2 a_uv;
@@ -170,42 +166,33 @@ const drawShader = twgl.createProgramInfo(gl, [
 ]);
 
 function render() {
-  // update velocity
   gl.useProgram(updateShader.program);
   twgl.setBuffersAndAttributes(gl, updateShader, twgl.createBufferInfoFromArrays(gl, quad));
   twgl.setUniforms(updateShader, {
     u_pos: state.posA,
     u_vel: state.velA,
     u_texSize: [TEX_SIZE, TEX_SIZE],
-    u_mouse: mouse,
-    uMaxSpeed: params.speed,
-    uAlign: params.align,
-    uCohesion: params.cohesion,
-    uSeparation: params.separation,
-    uMouseForce: params.repulsion,
-    uMouseRadius: params.radius,
+    u_mouse: mouse
   });
-  twgl.bindFramebufferInfo(gl, fbB);
+  twgl.bindFramebufferInfo(gl, fbVel);
   twgl.drawBufferInfo(gl, twgl.createBufferInfoFromArrays(gl, quad), gl.TRIANGLES);
 
-  // update position
-  twgl.setUniforms(updateShader, {
+  gl.useProgram(positionShader.program);
+  twgl.setBuffersAndAttributes(gl, positionShader, twgl.createBufferInfoFromArrays(gl, quad));
+  twgl.setUniforms(positionShader, {
     u_pos: state.posA,
     u_vel: state.velB,
   });
-  twgl.bindFramebufferInfo(gl, fbA);
+  twgl.bindFramebufferInfo(gl, fbPos);
   twgl.drawBufferInfo(gl, twgl.createBufferInfoFromArrays(gl, quad), gl.TRIANGLES);
 
-  // draw to screen
-  twgl.bindFramebufferInfo(gl, null);
+  gl.useProgram(drawShader.program);
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.useProgram(drawShader.program);
   twgl.setBuffersAndAttributes(gl, drawShader, boidBufferInfo);
   twgl.setUniforms(drawShader, { u_pos: state.posB });
   gl.drawArrays(gl.POINTS, 0, NUM);
 
-  // swap
   [state.posA, state.posB] = [state.posB, state.posA];
   [state.velA, state.velB] = [state.velB, state.velA];
 
