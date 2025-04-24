@@ -6,275 +6,208 @@
   <style>
     html, body { margin: 0; overflow: hidden; background: black; }
     canvas { display: block; width: 100vw; height: 100vh; }
+    #gui {
+      position: fixed;
+      top: 0;
+      right: 0;
+      padding: 10px;
+      background: rgba(0,0,0,0.6);
+      color: white;
+      font-family: sans-serif;
+      font-size: 12px;
+      z-index: 10;
+    }
+    #gui label {
+      display: block;
+      margin: 4px 0 2px;
+    }
   </style>
 </head>
 <body>
 <canvas id="glCanvas"></canvas>
-<script>
-// PARAMÈTRES AJUSTÉS POUR UN MOUVEMENT PLUS NATUREL
-const BOID_TEXTURE_SIZE = 128;
-const NUM_BOIDS = BOID_TEXTURE_SIZE * BOID_TEXTURE_SIZE;
-const MAX_SPEED = 0.01;
-const ALIGNMENT_STRENGTH = 0.02;
-const COHESION_STRENGTH = 0.005;
-const SEPARATION_STRENGTH = 0.03;
-const MOUSE_REPULSION = 0.003;
-const MOUSE_RADIUS = 0.2;
-const NEIGHBOR_DIST = 0.1;
+<div id="gui">
+  <label>Max Speed <input id="speed" type="range" min="0.001" max="0.05" step="0.001" value="0.01"></label>
+  <label>Align <input id="align" type="range" min="0.0" max="0.1" step="0.001" value="0.02"></label>
+  <label>Cohesion <input id="cohesion" type="range" min="0.0" max="0.05" step="0.001" value="0.005"></label>
+  <label>Separation <input id="separation" type="range" min="0.0" max="0.1" step="0.001" value="0.03"></label>
+  <label>Mouse Repulsion <input id="repulsion" type="range" min="0.0" max="0.01" step="0.0005" value="0.003"></label>
+  <label>Mouse Radius <input id="radius" type="range" min="0.05" max="1.0" step="0.01" value="0.2"></label>
+</div>
+<script type="module">
+import * as twgl from 'https://cdn.skypack.dev/twgl.js';
 
 const canvas = document.getElementById("glCanvas");
 const gl = canvas.getContext("webgl2");
-if (!gl) throw new Error("WebGL2 non supporté");
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
 if (!gl.getExtension("EXT_color_buffer_float")) alert("EXT_color_buffer_float manquant");
 
-function createDataTexture(data) {
-  const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, BOID_TEXTURE_SIZE, BOID_TEXTURE_SIZE, 0, gl.RGBA, gl.FLOAT, data);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  return tex;
-}
+const sliders = ['speed', 'align', 'cohesion', 'separation', 'repulsion', 'radius'];
+const params = {};
+sliders.forEach(id => {
+  params[id] = parseFloat(document.getElementById(id).value);
+  document.getElementById(id).addEventListener('input', () => {
+    params[id] = parseFloat(document.getElementById(id).value);
+  });
+});
 
-function randomData() {
-  const data = new Float32Array(NUM_BOIDS * 4);
-  for (let i = 0; i < NUM_BOIDS; i++) {
-    data[i * 4 + 0] = Math.random() * 2 - 1;
-    data[i * 4 + 1] = Math.random() * 2 - 1;
-    data[i * 4 + 2] = Math.random() * 0.02 - 0.01;
-    data[i * 4 + 3] = Math.random() * 0.02 - 0.01;
-  }
-  return data;
-}
-
-let posA = createDataTexture(randomData());
-let posB = createDataTexture(new Float32Array(NUM_BOIDS * 4));
-let velA = createDataTexture(randomData());
-let velB = createDataTexture(new Float32Array(NUM_BOIDS * 4));
-
-function createFramebuffer(tex) {
-  const fb = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-  return fb;
-}
-let fbPos = createFramebuffer(posB);
-let fbVel = createFramebuffer(velB);
-
-function createShader(type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    console.error(gl.getShaderInfoLog(shader));
-  }
-  return shader;
-}
-
-function createProgram(vertexSrc, fragmentSrc) {
-  const vs = createShader(gl.VERTEX_SHADER, vertexSrc);
-  const fs = createShader(gl.FRAGMENT_SHADER, fragmentSrc);
-  const program = gl.createProgram();
-  gl.attachShader(program, vs);
-  gl.attachShader(program, fs);
-  gl.linkProgram(program);
-  return program;
-}
-
-const quadVerts = new Float32Array([
-  -1, -1,
-   1, -1,
-  -1,  1,
-   1,  1,
-]);
-
-const quadVBO = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
-gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
-
-const updateVS = `#version 300 es
-in vec2 aPos;
-out vec2 vUV;
-void main() {
-  vUV = aPos * 0.5 + 0.5;
-  gl_Position = vec4(aPos, 0.0, 1.0);
-}`;
-
-const updateFS = `#version 300 es
-precision highp float;
-uniform sampler2D uPosition;
-uniform sampler2D uVelocity;
-uniform vec2 uMouse;
-uniform vec2 uTexSize;
-in vec2 vUV;
-out vec4 fragColor;
-
-void main() {
-  vec2 pos = texture(uPosition, vUV).xy;
-  vec2 vel = texture(uVelocity, vUV).xy;
-
-  vec2 alignment = vec2(0.0);
-  vec2 cohesion = vec2(0.0);
-  vec2 separation = vec2(0.0);
-  int count = 0;
-
-  for (int x = -2; x <= 2; x++) {
-    for (int y = -2; y <= 2; y++) {
-      vec2 offset = vec2(float(x), float(y)) / uTexSize;
-      vec2 samplePos = texture(uPosition, vUV + offset).xy;
-      vec2 sampleVel = texture(uVelocity, vUV + offset).xy;
-
-      float dist = distance(pos, samplePos);
-      if (dist > 0.0 && dist < ${NEIGHBOR_DIST}) {
-        alignment += sampleVel;
-        cohesion += samplePos;
-        separation += (pos - samplePos) / dist;
-        count++;
-      }
-    }
-  }
-
-  if (count > 0) {
-    alignment /= float(count);
-    cohesion = cohesion / float(count) - pos;
-    separation /= float(count);
-
-    vel += alignment * ${ALIGNMENT_STRENGTH} + cohesion * ${COHESION_STRENGTH} + separation * ${SEPARATION_STRENGTH};
-  }
-
-  vec2 mouseVec = pos - uMouse;
-  float mouseDist = length(mouseVec);
-  if (mouseDist < ${MOUSE_RADIUS}) {
-    vel += normalize(mouseVec) * ${MOUSE_REPULSION};
-  }
-
-  if (length(vel) > ${MAX_SPEED}) vel = normalize(vel) * ${MAX_SPEED};
-
-  fragColor = vec4(vel, 0.0, 1.0);
-}`;
-  
-const posFS = `#version 300 es
-precision highp float;
-uniform sampler2D uPosition;
-uniform sampler2D uVelocity;
-in vec2 vUV;
-out vec4 fragColor;
-
-void main() {
-  vec2 pos = texture(uPosition, vUV).xy;
-  vec2 vel = texture(uVelocity, vUV).xy;
-  pos += vel;
-  pos = mod(pos + 1.0, 2.0) - 1.0;
-  fragColor = vec4(pos, 0.0, 1.0);
-}`;
-
-const drawVS = `#version 300 es
-in vec2 aUV;
-uniform sampler2D uPosition;
-void main() {
-  vec2 pos = texture(uPosition, aUV).xy;
-  gl_Position = vec4(pos, 0.0, 1.0);
-  gl_PointSize = 2.0;
-}`;
-
-const drawFS = `#version 300 es
-precision mediump float;
-out vec4 fragColor;
-void main() {
-  fragColor = vec4(0.0, 1.0, 0.8, 1.0);
-}`;
-
-const updateProg = createProgram(updateVS, updateFS);
-const posProg = createProgram(updateVS, posFS);
-const drawProg = createProgram(drawVS, drawFS);
-
-const texUVs = new Float32Array(NUM_BOIDS * 2);
-for (let i = 0; i < NUM_BOIDS; i++) {
-  let x = (i % BOID_TEXTURE_SIZE + 0.5) / BOID_TEXTURE_SIZE;
-  let y = (Math.floor(i / BOID_TEXTURE_SIZE) + 0.5) / BOID_TEXTURE_SIZE;
-  texUVs.set([x, y], i * 2);
-}
-const boidVBO = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, boidVBO);
-gl.bufferData(gl.ARRAY_BUFFER, texUVs, gl.STATIC_DRAW);
-
-let mouse = [0.0, 0.0];
+let mouse = [0, 0];
 canvas.addEventListener("mousemove", e => {
   mouse = [(e.clientX / canvas.width) * 2.0 - 1.0, -((e.clientY / canvas.height) * 2.0 - 1.0)];
 });
 
-function useShader(prog, uniforms = {}) {
-  gl.useProgram(prog);
-  const aPos = gl.getAttribLocation(prog, "aPos");
-  if (aPos !== -1) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-  }
-  for (const name in uniforms) {
-    const loc = gl.getUniformLocation(prog, name);
-    const val = uniforms[name];
-    if (val.length === 2) gl.uniform2f(loc, val[0], val[1]);
-    else gl.uniform1i(loc, val);
-  }
+// Constantes
+const TEX_SIZE = 128;
+const NUM = TEX_SIZE * TEX_SIZE;
+const quad = {
+  a_position: { numComponents: 2, data: [-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1] }
+};
+
+const texCoords = new Float32Array(NUM * 2);
+for (let i = 0; i < NUM; ++i) {
+  texCoords[i * 2 + 0] = (i % TEX_SIZE + 0.5) / TEX_SIZE;
+  texCoords[i * 2 + 1] = (Math.floor(i / TEX_SIZE) + 0.5) / TEX_SIZE;
 }
 
-function updateTextures() {
-  // update velocity
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbVel);
-  gl.viewport(0, 0, BOID_TEXTURE_SIZE, BOID_TEXTURE_SIZE);
-  useShader(updateProg, {
-    uPosition: 0,
-    uVelocity: 1,
-    uMouse: mouse,
-    uTexSize: [BOID_TEXTURE_SIZE, BOID_TEXTURE_SIZE]
-  });
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, posA);
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, velA);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+const boidBufferInfo = twgl.createBufferInfoFromArrays(gl, {
+  a_uv: { numComponents: 2, data: texCoords },
+});
 
-  // update position
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbPos);
-  useShader(posProg, {
-    uPosition: 0,
-    uVelocity: 1
+function createDataTexture() {
+  const data = new Float32Array(NUM * 4);
+  for (let i = 0; i < NUM; i++) {
+    data[i * 4 + 0] = Math.random() * 2 - 1;
+    data[i * 4 + 1] = Math.random() * 2 - 1;
+    data[i * 4 + 2] = Math.random() * 0.01;
+    data[i * 4 + 3] = Math.random() * 0.01;
+  }
+  return twgl.createTexture(gl, {
+    width: TEX_SIZE,
+    height: TEX_SIZE,
+    src: data,
+    format: gl.RGBA,
+    internalFormat: gl.RGBA32F,
+    minMag: gl.NEAREST,
+    type: gl.FLOAT,
   });
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, posA);
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, velB);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
+
+const state = {
+  posA: createDataTexture(),
+  posB: createDataTexture(),
+  velA: createDataTexture(),
+  velB: createDataTexture(),
+};
+
+const fbA = twgl.createFramebufferInfo(gl, [{ attachment: state.posB }], TEX_SIZE, TEX_SIZE);
+const fbB = twgl.createFramebufferInfo(gl, [{ attachment: state.velB }], TEX_SIZE, TEX_SIZE);
+
+const updateShader = twgl.createProgramInfo(gl, [
+  `#version 300 es
+   in vec2 a_position;
+   out vec2 v_uv;
+   void main() {
+     v_uv = a_position * 0.5 + 0.5;
+     gl_Position = vec4(a_position, 0.0, 1.0);
+   }`,
+  `#version 300 es
+   precision highp float;
+   uniform sampler2D u_pos;
+   uniform sampler2D u_vel;
+   uniform vec2 u_mouse;
+   uniform vec2 u_texSize;
+   uniform float uMaxSpeed, uAlign, uCohesion, uSeparation, uMouseForce, uMouseRadius;
+   in vec2 v_uv;
+   out vec4 outColor;
+   void main() {
+     vec2 pos = texture(u_pos, v_uv).xy;
+     vec2 vel = texture(u_vel, v_uv).xy;
+     vec2 align = vec2(0), cohesion = vec2(0), separation = vec2(0);
+     int count = 0;
+     for (int x = -2; x <= 2; ++x) {
+       for (int y = -2; y <= 2; ++y) {
+         vec2 offset = vec2(float(x), float(y)) / u_texSize;
+         vec2 otherPos = texture(u_pos, v_uv + offset).xy;
+         vec2 otherVel = texture(u_vel, v_uv + offset).xy;
+         float d = distance(pos, otherPos);
+         if (d > 0. && d < 0.2) {
+           align += otherVel;
+           cohesion += otherPos;
+           separation += (pos - otherPos) / d;
+           count++;
+         }
+       }
+     }
+     if (count > 0) {
+       align /= float(count);
+       cohesion = cohesion / float(count) - pos;
+       separation /= float(count);
+       vel += align * uAlign + cohesion * uCohesion + separation * uSeparation;
+     }
+     float dm = distance(pos, u_mouse);
+     if (dm < uMouseRadius) vel += normalize(pos - u_mouse) * uMouseForce;
+     vel = length(vel) > uMaxSpeed ? normalize(vel) * uMaxSpeed : vel;
+     outColor = vec4(vel, 0.0, 1.0);
+   }`
+]);
+
+const drawShader = twgl.createProgramInfo(gl, [
+  `#version 300 es
+   in vec2 a_uv;
+   uniform sampler2D u_pos;
+   void main() {
+     vec2 pos = texture(u_pos, a_uv).xy;
+     gl_Position = vec4(pos, 0.0, 1.0);
+     gl_PointSize = 2.0;
+   }`,
+  `#version 300 es
+   precision mediump float;
+   out vec4 outColor;
+   void main() {
+     outColor = vec4(0.1, 1.0, 0.8, 1.0);
+   }`
+]);
 
 function render() {
-  updateTextures();
+  // update velocity
+  gl.useProgram(updateShader.program);
+  twgl.setBuffersAndAttributes(gl, updateShader, twgl.createBufferInfoFromArrays(gl, quad));
+  twgl.setUniforms(updateShader, {
+    u_pos: state.posA,
+    u_vel: state.velA,
+    u_texSize: [TEX_SIZE, TEX_SIZE],
+    u_mouse: mouse,
+    uMaxSpeed: params.speed,
+    uAlign: params.align,
+    uCohesion: params.cohesion,
+    uSeparation: params.separation,
+    uMouseForce: params.repulsion,
+    uMouseRadius: params.radius,
+  });
+  twgl.bindFramebufferInfo(gl, fbB);
+  twgl.drawBufferInfo(gl, twgl.createBufferInfoFromArrays(gl, quad), gl.TRIANGLES);
 
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // update position
+  twgl.setUniforms(updateShader, {
+    u_pos: state.posA,
+    u_vel: state.velB,
+  });
+  twgl.bindFramebufferInfo(gl, fbA);
+  twgl.drawBufferInfo(gl, twgl.createBufferInfoFromArrays(gl, quad), gl.TRIANGLES);
+
+  // draw to screen
+  twgl.bindFramebufferInfo(gl, null);
   gl.viewport(0, 0, canvas.width, canvas.height);
-  gl.clearColor(0.0, 0.0, 0.0, 1.0);
   gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(drawShader.program);
+  twgl.setBuffersAndAttributes(gl, drawShader, boidBufferInfo);
+  twgl.setUniforms(drawShader, { u_pos: state.posB });
+  gl.drawArrays(gl.POINTS, 0, NUM);
 
-  gl.useProgram(drawProg);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, posB);
-  gl.uniform1i(gl.getUniformLocation(drawProg, "uPosition"), 0);
-
-  gl.bindBuffer(gl.ARRAY_BUFFER, boidVBO);
-  const aUV = gl.getAttribLocation(drawProg, "aUV");
-  gl.enableVertexAttribArray(aUV);
-  gl.vertexAttribPointer(aUV, 2, gl.FLOAT, false, 0, 0);
-
-  gl.drawArrays(gl.POINTS, 0, NUM_BOIDS);
-
-  [posA, posB] = [posB, posA];
-  [velA, velB] = [velB, velA];
-  fbPos = createFramebuffer(posB);
-  fbVel = createFramebuffer(velB);
+  // swap
+  [state.posA, state.posB] = [state.posB, state.posA];
+  [state.velA, state.velB] = [state.velB, state.velA];
 
   requestAnimationFrame(render);
 }
