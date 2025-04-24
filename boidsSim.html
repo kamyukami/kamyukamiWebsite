@@ -11,8 +11,16 @@
 <body>
 <canvas id="glCanvas"></canvas>
 <script>
+// PARAMÈTRES AJUSTÉS POUR UN MOUVEMENT PLUS NATUREL
 const BOID_TEXTURE_SIZE = 128;
 const NUM_BOIDS = BOID_TEXTURE_SIZE * BOID_TEXTURE_SIZE;
+const MAX_SPEED = 0.01;
+const ALIGNMENT_STRENGTH = 0.02;
+const COHESION_STRENGTH = 0.005;
+const SEPARATION_STRENGTH = 0.03;
+const MOUSE_REPULSION = 0.003;
+const MOUSE_RADIUS = 0.2;
+const NEIGHBOR_DIST = 0.1;
 
 const canvas = document.getElementById("glCanvas");
 const gl = canvas.getContext("webgl2");
@@ -120,7 +128,7 @@ void main() {
       vec2 sampleVel = texture(uVelocity, vUV + offset).xy;
 
       float dist = distance(pos, samplePos);
-      if (dist > 0.0 && dist < 0.2) {
+      if (dist > 0.0 && dist < ${NEIGHBOR_DIST}) {
         alignment += sampleVel;
         cohesion += samplePos;
         separation += (pos - samplePos) / dist;
@@ -134,20 +142,20 @@ void main() {
     cohesion = cohesion / float(count) - pos;
     separation /= float(count);
 
-    vel += alignment * 0.05 + cohesion * 0.01 + separation * 0.05;
+    vel += alignment * ${ALIGNMENT_STRENGTH} + cohesion * ${COHESION_STRENGTH} + separation * ${SEPARATION_STRENGTH};
   }
 
   vec2 mouseVec = pos - uMouse;
   float mouseDist = length(mouseVec);
-  if (mouseDist < 0.3) {
-    vel += normalize(mouseVec) * 0.005;
+  if (mouseDist < ${MOUSE_RADIUS}) {
+    vel += normalize(mouseVec) * ${MOUSE_REPULSION};
   }
 
-  if (length(vel) > 0.03) vel = normalize(vel) * 0.03;
+  if (length(vel) > ${MAX_SPEED}) vel = normalize(vel) * ${MAX_SPEED};
 
   fragColor = vec4(vel, 0.0, 1.0);
 }`;
-
+  
 const posFS = `#version 300 es
 precision highp float;
 uniform sampler2D uPosition;
