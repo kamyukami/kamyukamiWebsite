@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <title>Boids Shader Visible</title>
+  <meta charset="UTF-8" />
+  <title>Boids Shader</title>
   <style>
     html, body {
       margin: 0;
@@ -62,22 +62,20 @@
       vec2 uv = gl_FragCoord.xy / uResolution.xy;
       vec3 color = vec3(0.0);
 
-      for (float i = 0.0; i < 150.0; i++) {
-        float id = i / 150.0;
-        float angle = id * 6.283 + uTime * 0.3;
+      for (float i = 0.0; i < 200.0; i++) {
+        float id = i / 200.0;
         vec2 p = vec2(
-          0.5 + 0.3 * cos(angle + id * 12.0 + uTime * 0.5),
-          0.5 + 0.3 * sin(angle + id * 15.0 + uTime * 0.4)
+          fract(sin(i * 12.9898 + uTime * 0.1) * 43758.5453),
+          fract(cos(i * 78.233 + uTime * 0.1) * 12498.345)
         );
 
-        // Mouse interaction
-        vec2 diff = uv - (uMouse / uResolution);
-        float distMouse = length(p - (uMouse / uResolution));
-        float repel = smoothstep(0.25, 0.0, distMouse);
+        // Mouvement en essaim (perturbé par le temps + souris)
+        vec2 dir = p - uv;
+        float dist = length(dir);
+        float repulsion = smoothstep(0.02, 0.0, distance(uv, uMouse / uResolution));
+        float glow = 0.01 / (dist + 0.005);
 
-        float d = length(uv - p);
-        float strength = 0.01 / (d * d + 0.001);
-        color += vec3(0.1, 1.0, 0.8) * strength * repel;
+        color += vec3(0.0, 1.0, 0.8) * glow * repulsion;
       }
 
       gl_FragColor = vec4(color, 1.0);
@@ -87,11 +85,9 @@
   <script>
     const canvas = document.getElementById("glCanvas");
     const gl = canvas.getContext("webgl");
+
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-
-    const vertexSource = document.getElementById("vertexShader").textContent;
-    const fragmentSource = document.getElementById("fragmentShader").textContent;
 
     function compileShader(type, source) {
       const shader = gl.createShader(type);
@@ -102,6 +98,9 @@
       }
       return shader;
     }
+
+    const vertexSource = document.getElementById("vertexShader").textContent;
+    const fragmentSource = document.getElementById("fragmentShader").textContent;
 
     const vertexShader = compileShader(gl.VERTEX_SHADER, vertexSource);
     const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentSource);
@@ -131,7 +130,7 @@
     const uResolution = gl.getUniformLocation(program, "uResolution");
     const uMouse = gl.getUniformLocation(program, "uMouse");
 
-    let mouse = [canvas.width / 2, canvas.height / 2];
+    let mouse = [0.5 * canvas.width, 0.5 * canvas.height];
     window.addEventListener("mousemove", e => {
       mouse = [e.clientX, canvas.height - e.clientY];
     });
